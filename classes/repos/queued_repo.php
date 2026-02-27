@@ -216,17 +216,14 @@ class queued_repo extends repo implements queued_repo_interface {
         $now = time();
         
         foreach ($syncthese as $cmsg) {
-            // If the message gets deleted but not removed (which shouldn't happen) from the 
-            // quickmail_msg_course table then skip past it.
-            try {
-                $zeemsg = new message($cmsg->message_id);
-            } catch (\Exception $e) {
-                error_log("\n\nCourse ".$cmsg->course_id. " could not find message: ".$cmsg->message_id."\n");
-                continue;
-            }
+            $zeemsg = new message($cmsg->message_id);
+            if ($zeemsg->get('to_send_at') <= $now) {
 
-            if ($zeemsg->get('to_send_at') <= $now && $zeemsg->get('sent_at') == '0') {
                 $zeemsg->populate_recip_course_msg();
+                $DB->update_record(
+                    'block_quickmail_msg_course',
+                    array('id' => $cmsg->id, 'sent_at' => $now)
+                );
             }
         }
         // syncing complete.
@@ -240,8 +237,21 @@ class queued_repo extends repo implements queued_repo_interface {
     public static function get_all_messages_to_send() {
         global $DB;
 
-        self::sync_course_recip_msgs();
+        try {
+            self::sync_course_recip_msgs();
+        } catch (\Exception $e) {
+            error_log("\n\nThere was an error trying to sync course msgs.\n");
+        }
 
+        //delete possible duplicates
+        
+        $DB->execute('DELETE tbl.*
+                        FROM {block_quickmail_msg_recips} tbl
+                        LEFT JOIN {block_quickmail_msg_recips} copy_tbl
+                        ON tbl.message_id = copy_tbl.message_id AND tbl.user_id = copy_tbl.user_id AND tbl.id > copy_tbl.id
+                        WHERE copy_tbl.id IS NOT null');
+        
+        
         $now = time();
 
         $sql = 'SELECT m.*
